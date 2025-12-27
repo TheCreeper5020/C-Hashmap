@@ -10,7 +10,8 @@ static const size_t default_initial_capacity = 64;
 static const size_t default_pair_count = 4;
 
 typedef struct bucket_t {
-    void **data; // nth key at 2n, nth value at 2n+1
+    void **data;        // nth key at 2n, nth value at 2n+1
+    size_t *hash_cache; // nth key's hash at n
     size_t pair_count, pair_max;
 } bucket_t;
 
@@ -135,10 +136,13 @@ static void *bucket_get(map_t *map, size_t location, void *key) {
     return NULL;
 }
 
-static int bucket_direct_insert(bucket_t *bucket, void *key, void *value) {
+static int bucket_direct_insert(bucket_t *bucket, void *key, size_t key_hash, void *value) {
     if (bucket->pair_max == 0) {
         bucket->data = malloc(default_pair_count * 2 * sizeof(void*));
-        if (!bucket->data) {
+        bucket->hash_cache = malloc(default_pair_count * sizeof(size_t));
+        if (!bucket->data || !bucket->hash_cache) {
+            free(bucket->data);
+            free(bucket->hash_cache);
             return -1;
         }
         bucket->pair_max = default_pair_count;
@@ -148,26 +152,37 @@ static int bucket_direct_insert(bucket_t *bucket, void *key, void *value) {
         while (bucket->pair_count >= new_max) {
             new_max *= 2;
         }
-        void **new_data = realloc(bucket->data, new_max * 2 * sizeof(void*));
-        if (!new_data) {
+
+        void **new_data = malloc(new_max * 2 * sizeof(void*));
+        size_t *new_hash_cache = malloc(new_max * sizeof(size_t));
+        if (!new_data || !new_hash_cache) {
+            free(new_data);
+            free(new_hash_cache);
             return -1;
         }
+
+        memcpy(new_data, bucket->data, bucket->pair_count * 2 * sizeof(void*));
+        memcpy(new_hash_cache, bucket->hash_cache, bucket->pair_count * sizeof(size_t));
+        free(bucket->data);
+        free(bucket->hash_cache);
         bucket->data = new_data;
+        bucket->hash_cache = new_hash_cache;
         bucket->pair_max = new_max;
     }
     bucket->data[2 * bucket->pair_count] = key;
     bucket->data[2 * bucket->pair_count + 1] = value;
+    bucket->hash_cache[bucket->pair_count] = key_hash;
 
     bucket->pair_count++;
     return 0;
 }
 
-static int bucket_insert(map_t *map, size_t location, void *key, void *value) {
+static int bucket_insert(map_t *map, size_t hash, size_t location, void *key, void *value) {
     bucket_t *bucket = &map->buckets[location];
     if (bucket_contains(map, location, key)) {
         return 1;
     }
-    return bucket_direct_insert(bucket, key, value);
+    return bucket_direct_insert(bucket, key, hash, value);
 }
 
 static int bucket_remove(map_t *map, size_t location, void *key) {
@@ -181,7 +196,8 @@ static int bucket_remove(map_t *map, size_t location, void *key) {
     for (size_t i = 0; i < bucket->pair_count; i++) {
         size_t curr_key_len = get_length(map, bucket->data[i * 2]);
         if (key_len == curr_key_len && !memcmp(key, bucket->data[i * 2], key_len)) {
-            memmove(&bucket->data[i * 2], &bucket->data[i * 2 + 2], sizeof(void*) * (bucket->pair_count * 2 - i * 2 - 2));
+            memmove(&bucket->data[i * 2], &bucket->data[i * 2 + 2], 2 * sizeof(void*) * (bucket->pair_count - i - 1));
+            memmove(&bucket->hash_cache[i], &bucket->hash_cache[i + 1], sizeof(size_t) * (bucket->pair_count - i - 1));
             bucket->pair_count--;
             return 0;
         }
@@ -196,6 +212,7 @@ static void free_buckets(bucket_t *buckets, size_t bucket_count) {
     }
     for (size_t i = 0; i < bucket_count; i++) {
         free(buckets[i].data);
+        free(buckets[i].hash_cache);
     }
     free(buckets);
 }
@@ -214,8 +231,8 @@ static int map_rehash(map_t *map, size_t new_capacity) {
         for (size_t j = 0; j < bucket->pair_count; j++) {
             void *key = bucket->data[2 * j];
             void *value = bucket->data[2 * j + 1];
-            size_t hash = map->function_table.hash(key, get_length(map, key)) % new_capacity;
-            if (bucket_direct_insert(&new_buckets[hash], key, value) < 0) {
+            size_t hash = bucket->hash_cache[j];
+            if (bucket_direct_insert(&new_buckets[hash % new_capacity], key, hash, value) < 0) {
                 free_buckets(new_buckets, new_capacity);
                 return -1;
             }
@@ -237,9 +254,10 @@ int map_insert(map_t *map, void *key, void *value) {
         map_rehash(map, new_capacity);
     }
 
-    size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
+    size_t key_hash = map->function_table.hash(key, get_length(map, key));
+    size_t bucket_index = key_hash % map->bucket_count;
 
-    int bucket_insert_retval = bucket_insert(map, bucket_index, key, value);
+    int bucket_insert_retval = bucket_insert(map, key_hash, bucket_index, key, value);
     if (bucket_insert_retval < 0) {
         return -1;
     }
