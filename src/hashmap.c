@@ -141,6 +141,7 @@ static int bucket_direct_insert(bucket_t *bucket, void *key, void *value) {
     bucket->data[2 * bucket->pair_count + 1] = value;
 
     bucket->pair_count++;
+    return 0;
 }
 
 static int bucket_insert(map_t *map, size_t location, void *key, void *value) {
@@ -166,7 +167,7 @@ static size_t load_factor(size_t element_count, size_t bucket_count) {
 }
 
 static int map_rehash(map_t *map, size_t new_capacity) {
-    bucket_t *new_buckets = malloc(new_capacity * sizeof(bucket_t));
+    bucket_t *new_buckets = calloc(new_capacity, sizeof(bucket_t));
     if (!new_buckets) {
         return -1;
     }
@@ -192,14 +193,18 @@ static int map_rehash(map_t *map, size_t new_capacity) {
 int map_insert(map_t *map, void *key, void *value) {
     if (load_factor(map->element_count, map->bucket_count) >= load_max) {
         size_t new_capacity = map->element_count * 2;
-        while (load_factor(new_capacity, map->bucket_count) >= load_max) {
+        while (load_factor(map->element_count, new_capacity) >= load_max) {
             new_capacity *= 2;
         }
         map_rehash(map, new_capacity);
     }
 
     size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
-    return bucket_insert(map, bucket_index, key, value);
+    if (bucket_insert(map, bucket_index, key, value) < 0) {
+        return -1;
+    }
+    map->element_count++;
+    return 0;
 }
 
 void map_free(map_t *map) {
