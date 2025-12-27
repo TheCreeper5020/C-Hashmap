@@ -4,23 +4,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const size_t load_max = 75;
+
 static const size_t default_initial_capacity = 64;
+static const size_t default_pair_count = 4;
 
 typedef struct bucket_t {
     void **data; // nth key at 2n, nth value at 2n+1
     size_t pair_count, pair_max;
 } bucket_t;
 
+typedef struct map_fp_table_t {
+    map_hash_function hash;
+    map_key_length_function length;
+} map_fp_table_t;
+
 typedef struct map_t {
     bucket_t *buckets;
     size_t bucket_count;
-    size_t (*hash_function)(const void*, size_t);
-    bool static_key_size;
-    union {
-        size_t bytes;                           // if static_size is TRUE
-        size_t (*compute_size)(const void*);    // if static_size is FALSE
-    } key_size;
-    bool (*key_equal)(const void*, const void*, size_t);
+    size_t static_key_size; // if zero, call function_table.length()
+    size_t element_count;
+    map_fp_table_t function_table;
 } map_t;
 
 /*
@@ -41,13 +45,11 @@ size_t map_hash(const void *key, size_t size) {
     return hash;
 }
 
-bool map_key_equal(const void *key_a, const void *key_b, size_t size) {
-    return !memcmp(key_a, key_b, size);
+size_t map_strlen(const void *key) {
+    return strlen(key);
 }
 
-static map_t *make_map(size_t initial_capacity,
-    size_t (*hash_key)(const void*, size_t),
-    bool (*key_equal)(const void*, const void*, size_t)) {
+map_t *make_map(size_t initial_capacity, map_hash_function hash) {
     map_t *result = malloc(sizeof(map_t));
     if (!result) {
         return NULL;
@@ -62,36 +64,91 @@ static map_t *make_map(size_t initial_capacity,
     }
     result->bucket_count = initial_capacity;
 
-    result->hash_function = hash_key ? hash_key : map_hash;
-    result->key_equal = key_equal ? key_equal : map_key_equal;
+    result->function_table.hash = hash ? hash : map_hash;
+    result->element_count = 0;
 
     return result;
 }
 
-map_t *map_create(size_t initial_capacity, 
-    size_t (*hash_key)(const void*, size_t),
-    size_t (*get_key_length)(const void*),
-    bool (*key_equal)(const void*, const void*, size_t)) {
-    map_t *map = make_map(initial_capacity, hash_key, key_equal);
+map_t *map_create(size_t initial_capacity, map_hash_function hash, map_key_length_function get_key_length) {
+    map_t *map = make_map(initial_capacity, hash);
     if (!map) {
         return NULL;
     }
-    map->static_key_size = false;
-    map->key_size.compute_size = get_key_length ? get_key_length : (size_t (*)(const void*))(strlen);
+    map->static_key_size = 0;
+    map->function_table.length = get_key_length ? get_key_length : map_strlen;
     return map;
 }
 
-map_t *map_create_static(size_t initial_capacity,
-    size_t (*hash_key)(const void*, size_t),
-    size_t key_length,
-    bool (*key_equal)(const void*, const void*, size_t)) {
-    map_t *map = make_map(initial_capacity, hash_key, key_equal);
+map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t key_length) {
+    if (key_length == 0) {
+        return NULL; // invalid parameter
+    }
+    map_t *map = make_map(initial_capacity, hash);
     if (!map) {
         return NULL;
     }
-    map->static_key_size = true;
-    map->key_size.bytes = key_length;
+    map->static_key_size = key_length;
+    map->function_table.length = NULL; // this will help us catch bugs, as calling NULL leads to a segfault.
     return map;
+}
+
+static size_t get_length(const map_t *map, const void *key) {
+    if (map->static_key_size == 0) {
+        return map->function_table.length(key);
+    }
+    return map->static_key_size;
+}
+
+static bool bucket_contains(const map_t *map, size_t location, const void *key) {
+    bucket_t *bucket = &map->buckets[location];
+    if (bucket->pair_count == 0) {
+        return false;
+    }
+
+    size_t key_len = get_length(map, key);
+
+    for (size_t i = 0; i < bucket->pair_count; i++) {
+        size_t curr_key_len = get_length(map, bucket->data[i * 2]);
+        if (key_len == curr_key_len && !memcmp(bucket->data[i * 2], key, key_len)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int bucket_direct_insert(bucket_t *bucket, void *key, void *value) {
+    if (bucket->pair_max == 0) {
+        bucket->data = malloc(default_pair_count * 2 * sizeof(void*));
+        if (!bucket->data) {
+            return -1;
+        }
+        bucket->pair_max = default_pair_count;
+    }
+    if (bucket->pair_count >= bucket->pair_max) {
+        size_t new_max = bucket->pair_max * 2;
+        while (bucket->pair_count >= new_max) {
+            new_max *= 2;
+        }
+        void **new_data = realloc(bucket->data, new_max * 2 * sizeof(void*));
+        if (!new_data) {
+            return -1;
+        }
+        bucket->data = new_data;
+        bucket->pair_max = new_max;
+    }
+    bucket->data[2 * bucket->pair_count] = key;
+    bucket->data[2 * bucket->pair_count + 1] = value;
+
+    bucket->pair_count++;
+}
+
+static int bucket_insert(map_t *map, size_t location, void *key, void *value) {
+    bucket_t *bucket = &map->buckets[location];
+    if (bucket_contains(map, location, key)) {
+        return 0;
+    }
+    return bucket_direct_insert(bucket, key, value);
 }
 
 static void free_buckets(bucket_t *buckets, size_t bucket_count) {
@@ -102,6 +159,47 @@ static void free_buckets(bucket_t *buckets, size_t bucket_count) {
         free(buckets[i].data);
     }
     free(buckets);
+}
+
+static size_t load_factor(size_t element_count, size_t bucket_count) {
+    return (element_count * 100) / bucket_count;
+}
+
+static int map_rehash(map_t *map, size_t new_capacity) {
+    bucket_t *new_buckets = malloc(new_capacity * sizeof(bucket_t));
+    if (!new_buckets) {
+        return -1;
+    }
+    for (size_t i = 0; i < map->bucket_count; i++) {
+        bucket_t *bucket = &map->buckets[i];
+        for (size_t j = 0; j < bucket->pair_count; j++) {
+            void *key = bucket->data[2 * j];
+            void *value = bucket->data[2 * j + 1];
+            size_t hash = map->function_table.hash(key, get_length(map, key)) % new_capacity;
+            if (bucket_direct_insert(&new_buckets[hash], key, value) < 0) {
+                free_buckets(new_buckets, new_capacity);
+                return -1;
+            }
+        }
+    }
+
+    free_buckets(map->buckets, map->bucket_count);
+    map->buckets = new_buckets;
+    map->bucket_count = new_capacity;
+    return 0;
+}
+
+int map_insert(map_t *map, void *key, void *value) {
+    if (load_factor(map->element_count, map->bucket_count) >= load_max) {
+        size_t new_capacity = map->element_count * 2;
+        while (load_factor(new_capacity, map->bucket_count) >= load_max) {
+            new_capacity *= 2;
+        }
+        map_rehash(map, new_capacity);
+    }
+
+    size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
+    return bucket_insert(map, bucket_index, key, value);
 }
 
 void map_free(map_t *map) {

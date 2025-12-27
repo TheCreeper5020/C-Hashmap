@@ -6,6 +6,9 @@
 
 typedef struct map_t map_t;
 
+typedef size_t  (*map_hash_function)(const void*, size_t);
+typedef size_t  (*map_key_length_function)(const void*);
+
 /*
     Hashes a `key` of given `size`.
     Suitable for passing in as the `hash_key` argument for `map_create`
@@ -13,9 +16,10 @@ typedef struct map_t map_t;
 size_t map_hash(const void *key, size_t size);
 
 /*
-    Uses memcmp to determine if key_a == key_b
+    Wrapper around strlen accepting const void* instead of const char*
+    The key is expected to be terminated by a NULL byte.
 */
-bool map_key_equal(const void *key_a, const void *key_b, size_t size);
+size_t map_strlen(const void *key);
 
 /*
     Allocates memory for and creates a map.
@@ -23,24 +27,23 @@ bool map_key_equal(const void *key_a, const void *key_b, size_t size);
         If set to zero, then the implementation chooses a default size.
     `hash_key` is a function for hashing a key. If set to NULL, it will be as if you passed `map_hash`
     `get_key_length` is a function for computing the key length of a key, for hashing and comparison
-        If set to NULL, it will be as if you passed (size_t (*)(const void*))(strlen).
-    `key_equal` is a function for determining if two keys compare equal, used so that the hashmap has no duplicates.
-        If set to NULL, it will be as if you passed in `map_key_equal`.
+        If set to NULL, it will be as if you passed `map_strlen`.
 */
-map_t *map_create(size_t initial_capacity, 
-    size_t (*hash_key)(const void*, size_t),
-    size_t (*get_key_length)(const void*),
-    bool (*key_equal)(const void*, const void*, size_t));
+map_t *map_create(size_t initial_capacity, map_hash_function hash, map_key_length_function get_key_length);
 
 /*
     This function is analogous to `map_create`, except instead of specifying a function to compute the length of keys,
     it accepts the key size upfront. This should be used when the key size doesn't differ between keys (e.g. if keys
     are integers, but not if they are strings)
 */
-map_t *map_create_static(size_t initial_capacity,
-    size_t (*hash_key)(const void*, size_t),
-    size_t key_length,
-    bool (*key_equal)(const void*, const void*, size_t));
+map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t key_length);
+
+/*
+    Inserts `key` into `map` and associates it with `value`.
+    Returns 0 on success or -1 on failure.
+    Inserting the same key twice will result in success both times, even though on the second attempt nothing was inserted.
+*/
+int map_insert(map_t *map, void *key, void *value);
 
 /*
     This function frees a map.
