@@ -181,7 +181,8 @@ static int bucket_remove(map_t *map, size_t location, void *key) {
     for (size_t i = 0; i < bucket->pair_count; i++) {
         size_t curr_key_len = get_length(map, bucket->data[i * 2]);
         if (key_len == curr_key_len && !memcmp(key, bucket->data[i * 2], key_len)) {
-            memmove(&bucket->data[i * 2], &bucket->data[i * 2 + 2], bucket->pair_count * 2 - (i * 2));
+            memmove(&bucket->data[i * 2], &bucket->data[i * 2 + 2], sizeof(void*) * (bucket->pair_count * 2 - i * 2 - 2));
+            bucket->pair_count--;
             return 0;
         }
     }
