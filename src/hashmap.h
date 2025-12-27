@@ -57,6 +57,12 @@ bool map_contains(map_t *map, void *key);
 void *map_get(map_t *map, void *key);
 
 /*
+    Remove `key` and its associated value from `map`.
+    Returns -1 if `key` does not exist in `map`.
+*/
+int map_remove(map_t *map, void *key);
+
+/*
     This function frees a map.
     If you do not call this, you will have a memory leak!
 */

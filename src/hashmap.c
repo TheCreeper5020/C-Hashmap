@@ -170,6 +170,25 @@ static int bucket_insert(map_t *map, size_t location, void *key, void *value) {
     return bucket_direct_insert(bucket, key, value);
 }
 
+static int bucket_remove(map_t *map, size_t location, void *key) {
+    bucket_t *bucket = &map->buckets[location];
+    if (bucket->pair_count == 0) {
+        return -1;
+    }
+
+    size_t key_len = get_length(map, key);
+
+    for (size_t i = 0; i < bucket->pair_count; i++) {
+        size_t curr_key_len = get_length(map, bucket->data[i * 2]);
+        if (key_len == curr_key_len && !memcmp(key, bucket->data[i * 2], key_len)) {
+            memmove(&bucket->data[i * 2], &bucket->data[i * 2 + 2], bucket->pair_count * 2 - (i * 2));
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
 static void free_buckets(bucket_t *buckets, size_t bucket_count) {
     if (!buckets) {
         return;
@@ -237,6 +256,11 @@ bool map_contains(map_t *map, void *key) {
 void *map_get(map_t *map, void *key) {
     size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
     return bucket_get(map, bucket_index, key);
+}
+
+int map_remove(map_t *map, void *key) {
+    size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
+    return bucket_remove(map, bucket_index, key);
 }
 
 void map_free(map_t *map) {
