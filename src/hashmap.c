@@ -117,6 +117,24 @@ static bool bucket_contains(const map_t *map, size_t location, const void *key) 
     return false;
 }
 
+static void *bucket_get(map_t *map, size_t location, void *key) {
+    bucket_t *bucket = &map->buckets[location];
+    if (bucket->pair_count == 0) {
+        return false;
+    }
+
+    size_t key_len = get_length(map, key);
+    
+    for (size_t i = 0; i < bucket->pair_count; i++) {
+        size_t curr_key_len = get_length(map, bucket->data[i * 2]);
+        if (key_len == curr_key_len && !memcmp(bucket->data[i * 2], key, key_len)) {
+            return bucket->data[i * 2 + 1];
+        }
+    }
+
+    return NULL;
+}
+
 static int bucket_direct_insert(bucket_t *bucket, void *key, void *value) {
     if (bucket->pair_max == 0) {
         bucket->data = malloc(default_pair_count * 2 * sizeof(void*));
@@ -209,6 +227,16 @@ int map_insert(map_t *map, void *key, void *value) {
         map->element_count++;
     }
     return 0;
+}
+
+bool map_contains(map_t *map, void *key) {
+    size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
+    return bucket_contains(map, bucket_index, key);
+}
+
+void *map_get(map_t *map, void *key) {
+    size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
+    return bucket_get(map, bucket_index, key);
 }
 
 void map_free(map_t *map) {

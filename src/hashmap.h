@@ -46,6 +46,17 @@ map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t
 int map_insert(map_t *map, void *key, void *value);
 
 /*
+    returns true if `key` occurs in `map`, otherwise false
+*/
+bool map_contains(map_t *map, void *key);
+
+/*
+    Retrieve the value associated with `key` from map.
+    Returns NULL if no such value was found.
+*/
+void *map_get(map_t *map, void *key);
+
+/*
     This function frees a map.
     If you do not call this, you will have a memory leak!
 */
