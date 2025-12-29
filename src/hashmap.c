@@ -35,13 +35,18 @@ typedef struct map_fp_table_t {
     map_key_length_function length;
 } map_fp_table_t;
 
-typedef struct map_t {
-    bucket_t *buckets;
-    size_t bucket_count;
-    size_t static_key_size; // if zero, call function_table.length()
-    size_t element_count;
-    map_fp_table_t function_table;
-} map_t;
+struct map_t {
+    bucket_t        *buckets;
+    size_t          bucket_count;
+    size_t          static_key_size; // if zero, call function_table.length()
+    size_t          element_count;
+    map_fp_table_t  function_table;
+};
+
+struct map_iterator_t {
+    map_t *map;
+    size_t current_bucket, current_pair;
+};
 
 static _Thread_local int error_code = MAP_ERROR_OK;
 
@@ -368,4 +373,77 @@ void map_free(map_t *map) {
     }
     free_buckets(map->buckets, map->bucket_count);
     free(map);
+}
+
+static map_iterator_t *iterator_alloc(map_t *map) {
+    if (!map) {
+        RET_PTR_ERROR(MAP_ERROR_INVALID);
+    }
+    map_iterator_t *result = malloc(sizeof(map_iterator_t));
+    if (!result) {
+        RET_PTR_ERROR(MAP_ERROR_NOALLOC);
+    }
+    result->map = map;
+    return result;
+}
+
+static size_t find_next_nonempty_bucket(map_t *map, size_t start_pos) {
+    for (size_t i = start_pos; i < map->bucket_count; i++) {
+        if (map->buckets[i].pair_count > 0) {
+            return i;
+        }
+    }
+    return map->bucket_count;
+}
+
+map_iterator_t *map_begin(map_t *map) {
+    map_iterator_t *result = iterator_alloc(map);
+    if (!result) {
+        return NULL;
+    }
+
+    result->current_bucket = find_next_nonempty_bucket(map, 0);
+    result->current_pair = 0;
+
+    RET_SUCCESS(result);
+}
+
+map_iterator_t *map_end(map_t *map) {
+    map_iterator_t *result = iterator_alloc(map);
+    if (!result) {
+        return NULL;
+    }
+
+    result->current_bucket = map->bucket_count;
+    result->current_pair = 0;
+
+    return result;
+}
+
+int map_next(map_iterator_t *iterator) {
+    if (iterator->current_bucket >= iterator->map->bucket_count) {
+        RET_INT_ERROR(MAP_ERROR_OUT_OF_BOUNDS);
+    }
+    iterator->current_pair++;
+    if (iterator->current_pair >= iterator->map->buckets[iterator->current_bucket].pair_count) {
+        iterator->current_bucket = find_next_nonempty_bucket(iterator->map, iterator->current_bucket + 1);
+        iterator->current_pair = 0;
+    }
+    RET_SUCCESS(0)
+}
+
+int map_get_pair(map_iterator_t *iterator, void **key, void **value) {
+    if (!key || !value) {
+        RET_INT_ERROR(MAP_ERROR_INVALID);
+    }
+
+    if (iterator->current_bucket >= iterator->map->bucket_count) {
+        RET_INT_ERROR(MAP_ERROR_OUT_OF_BOUNDS);
+    }
+
+    kvp_t *pair = &iterator->map->buckets[iterator->current_bucket].pairs[iterator->current_pair];
+    *key = pair->key.bytes;
+    *value = pair->value;
+
+    RET_SUCCESS(0);
 }

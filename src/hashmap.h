@@ -101,9 +101,11 @@ map_iterator_t *map_end(map_t *map);
 int map_next(map_iterator_t *iterator);
 
 /*
-    Move `iterator` backward one unit in the map. Returns -1 if attempting to go past map_begin()
+    Obtain the key-value pair that `iterator` currently points to.
+    `key` should point to a variable to recieve the key.
+    `value` should point to a variable to recieve the value.
 */
-int map_prev(map_iterator_t *iterator);
+int map_get_pair(map_iterator_t *iterator, void **key, void **value);
 
 /*
     Free any memory associated with `iterator`
