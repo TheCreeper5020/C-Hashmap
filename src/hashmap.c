@@ -66,6 +66,7 @@ map_t *make_map(size_t initial_capacity, map_hash_function hash) {
     result->bucket_count = initial_capacity;
 
     result->function_table.hash = hash ? hash : map_hash;
+    result->function_table.length = NULL;
     result->element_count = 0;
 
     return result;
@@ -90,7 +91,6 @@ map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t
         return NULL;
     }
     map->static_key_size = key_length;
-    map->function_table.length = NULL; // this will help us catch bugs, as calling NULL leads to a segfault.
     return map;
 }
 
@@ -101,7 +101,7 @@ static size_t get_length(const map_t *map, const void *key) {
     return map->static_key_size;
 }
 
-static bool bucket_contains(const map_t *map, size_t location, const void *key) {
+static bool bucket_contains(const map_t *map, size_t location, const void *key, size_t key_hash) {
     bucket_t *bucket = &map->buckets[location];
     if (bucket->pair_count == 0) {
         return false;
@@ -111,24 +111,24 @@ static bool bucket_contains(const map_t *map, size_t location, const void *key) 
 
     for (size_t i = 0; i < bucket->pair_count; i++) {
         size_t curr_key_len = get_length(map, bucket->data[i * 2]);
-        if (key_len == curr_key_len && !memcmp(bucket->data[i * 2], key, key_len)) {
+        if (key_len == curr_key_len && key_hash == bucket->hash_cache[i] && !memcmp(bucket->data[i * 2], key, key_len)) {
             return true;
         }
     }
     return false;
 }
 
-static void *bucket_get(map_t *map, size_t location, void *key) {
+static void *bucket_get(map_t *map, size_t location, void *key, size_t key_hash) {
     bucket_t *bucket = &map->buckets[location];
     if (bucket->pair_count == 0) {
-        return false;
+        return NULL;
     }
 
     size_t key_len = get_length(map, key);
     
     for (size_t i = 0; i < bucket->pair_count; i++) {
         size_t curr_key_len = get_length(map, bucket->data[i * 2]);
-        if (key_len == curr_key_len && !memcmp(bucket->data[i * 2], key, key_len)) {
+        if (key_len == curr_key_len && key_hash == bucket->hash_cache[i] && !memcmp(bucket->data[i * 2], key, key_len)) {
             return bucket->data[i * 2 + 1];
         }
     }
@@ -179,7 +179,7 @@ static int bucket_direct_insert(bucket_t *bucket, void *key, size_t key_hash, vo
 
 static int bucket_insert(map_t *map, size_t hash, size_t location, void *key, void *value) {
     bucket_t *bucket = &map->buckets[location];
-    if (bucket_contains(map, location, key)) {
+    if (bucket_contains(map, location, key, hash)) {
         return 1;
     }
     return bucket_direct_insert(bucket, key, hash, value);
@@ -199,6 +199,7 @@ static int bucket_remove(map_t *map, size_t location, void *key) {
             memmove(&bucket->data[i * 2], &bucket->data[i * 2 + 2], 2 * sizeof(void*) * (bucket->pair_count - i - 1));
             memmove(&bucket->hash_cache[i], &bucket->hash_cache[i + 1], sizeof(size_t) * (bucket->pair_count - i - 1));
             bucket->pair_count--;
+            map->element_count--;
             return 0;
         }
     }
@@ -268,13 +269,15 @@ int map_insert(map_t *map, void *key, void *value) {
 }
 
 bool map_contains(map_t *map, void *key) {
-    size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
-    return bucket_contains(map, bucket_index, key);
+    size_t hash = map->function_table.hash(key, get_length(map, key));
+    size_t bucket_index = hash % map->bucket_count;
+    return bucket_contains(map, bucket_index, key, hash);
 }
 
 void *map_get(map_t *map, void *key) {
-    size_t bucket_index = map->function_table.hash(key, get_length(map, key)) % map->bucket_count;
-    return bucket_get(map, bucket_index, key);
+    size_t hash = map->function_table.hash(key, get_length(map, key));
+    size_t bucket_index = hash % map->bucket_count;
+    return bucket_get(map, bucket_index, key, hash);
 }
 
 int map_remove(map_t *map, void *key) {
