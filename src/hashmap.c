@@ -151,7 +151,7 @@ static bool bucket_contains(const map_t *map, uint64_t location, map_key_t *key)
         kvp_t *pair = &bucket->pairs[i];
         if (key->hash == pair->key.hash
             && key->len == pair->key.len
-            && !memcmp(pair->key.bytes, key, key->len)) {
+            && !memcmp(pair->key.bytes, key->bytes, key->len)) {
             return true;
         }
     }
@@ -168,7 +168,7 @@ static void *bucket_get(map_t *map, uint64_t location, map_key_t *key) {
         kvp_t *pair = &bucket->pairs[i];
         if (key->hash == pair->key.hash
             && key->len == pair->key.len
-            && !memcmp(pair->key.bytes, key, key->len)) {
+            && !memcmp(pair->key.bytes, key->bytes, key->len)) {
             RET_SUCCESS(pair->value);
         }
     }
@@ -225,7 +225,7 @@ static int bucket_remove(map_t *map, size_t location, map_key_t *key) {
         if (key->hash == pair->key.hash 
             && key->len == pair->key.len 
             && !memcmp(pair->key.bytes, key, key->len)) {
-            memmove(&bucket->pairs[i], &bucket->pairs[i + 1], bucket->pair_count - i);
+            memmove(&bucket->pairs[i], &bucket->pairs[i + 1], sizeof(kvp_t) * (bucket->pair_count - i - 1));
             bucket->pair_count--;
             RET_SUCCESS(0);
         }
@@ -353,7 +353,11 @@ int map_remove(map_t *map, void *key) {
         .hash = hash,
     };
 
-    return bucket_remove(map, bucket_index, &key_to_check);
+    if (bucket_remove(map, bucket_index, &key_to_check) < 0) {
+        return -1;
+    }
+    map->element_count--;
+    RET_SUCCESS(0);
 }
 
 void map_free(map_t *map) {
