@@ -224,7 +224,7 @@ static int bucket_remove(map_t *map, size_t location, map_key_t *key) {
         kvp_t *pair = &bucket->pairs[i];
         if (key->hash == pair->key.hash 
             && key->len == pair->key.len 
-            && !memcmp(pair->key.bytes, key, key->len)) {
+            && !memcmp(pair->key.bytes, key->bytes, key->len)) {
             memmove(&bucket->pairs[i], &bucket->pairs[i + 1], sizeof(kvp_t) * (bucket->pair_count - i - 1));
             bucket->pair_count--;
             RET_SUCCESS(0);
