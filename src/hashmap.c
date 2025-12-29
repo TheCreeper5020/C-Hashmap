@@ -448,7 +448,7 @@ int map_get_pair(map_iterator_t *iterator, void **key, void **value) {
     RET_SUCCESS(0);
 }
 
-bool iterator_equal(map_iterator_t *a, map_iterator_t *b) {
+bool map_iterator_equal(map_iterator_t *a, map_iterator_t *b) {
     if (!a || !b) {
         return false;
     }
