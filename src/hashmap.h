@@ -55,7 +55,8 @@ map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t
 /*
     Inserts `key` into `map` and associates it with `value`.
     Returns 0 on success or -1 on failure.
-    Inserting the same key twice will result in success both times, even though on the second attempt nothing was inserted.
+    NOTE: this does not copy key or value into the hashmap. If the memory that key or value points to
+    is deallocated, the map will have a dangling pointer. Ensure that memory in the map outlives the map.
 */
 int map_insert(map_t *map, void *key, void *value);
 
