@@ -452,7 +452,7 @@ bool map_iterator_equal(map_iterator_t *a, map_iterator_t *b) {
     if (!a || !b) {
         return false;
     }
-    return !memcmp(a, b, sizeof(map_iterator_t));
+    return a->current_bucket == b->current_bucket && a->current_pair == b->current_pair && a->map == b->map;
 }
 
 void map_iterator_free(map_iterator_t *iterator) {
