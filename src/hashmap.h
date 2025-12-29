@@ -1,6 +1,7 @@
 #ifndef HASHMAP_H
 #define HASHMAP_H
 
+#include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -15,18 +16,18 @@
 #define MAP_ERROR_NOTFOUND  4
 
 int map_last_error();
-char *map_str_error(int error_code);
+const char *map_str_error(int error_code);
 
 typedef struct map_t map_t;
 
-typedef size_t  (*map_hash_function)(const void*, size_t);
-typedef size_t  (*map_key_length_function)(const void*);
+typedef uint64_t    (*map_hash_function)(const void*, size_t);
+typedef size_t      (*map_key_length_function)(const void*);
 
 /*
     Hashes a `key` of given `size`.
     Suitable for passing in as the `hash_key` argument for `map_create`
 */
-size_t map_hash(const void *key, size_t size);
+uint64_t map_hash(const void *key, size_t size);
 
 /*
     Wrapper around strlen accepting const void* instead of const char*

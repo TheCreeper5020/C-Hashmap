@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #define RET_SUCCESS(retn) do { error_code = MAP_ERROR_OK; return retn; } while (0)
 #define RET_PTR_ERROR(code) do { error_code = code; return NULL; } while (0)
@@ -13,9 +14,19 @@ static const size_t load_max = 75;
 static const size_t default_initial_capacity = 64;
 static const size_t default_pair_count = 4;
 
+typedef struct map_key_t {
+    void *bytes;
+    uint64_t hash;
+    size_t len;
+} map_key_t;
+
+typedef struct kvp_t {
+    map_key_t key;
+    void *value;
+} kvp_t;
+
 typedef struct bucket_t {
-    void **data;        // nth key at 2n, nth value at 2n+1
-    size_t *hash_cache; // nth key's hash at n
+    kvp_t *pairs;
     size_t pair_count, pair_max;
 } bucket_t;
 
@@ -38,7 +49,7 @@ int map_last_error() {
     return error_code;
 }
 
-char *map_str_error(int error_code) {
+const char *map_str_error(int error_code) {
     switch (error_code) {
         case MAP_ERROR_OK:
             return "Ok";
@@ -58,12 +69,12 @@ char *map_str_error(int error_code) {
 /*
     Implementation of FNV-1a for either 32-bit or 64-bit size_t
 */
-size_t map_hash(const void *key, size_t size) {
-    static const size_t FNV_offset_basis = sizeof(size_t) == 8 ? 14695981039346656037ull : 2166136261ul;
-    static const size_t FNV_prime = sizeof(size_t) == 8 ? 1099511628211ull : 16777619ul;
+uint64_t map_hash(const void *key, size_t size) {
+    static const uint64_t FNV_offset_basis = 14695981039346656037ull;
+    static const uint64_t FNV_prime = 1099511628211ull;
 
-    char *bytes = (char*)(key);
-    size_t hash = FNV_offset_basis;
+    const char *bytes = (const char*)(key);
+    uint64_t hash = FNV_offset_basis;
 
     for (size_t i = 0; i < size; i++) {
         hash ^= bytes[i];
@@ -74,13 +85,10 @@ size_t map_hash(const void *key, size_t size) {
 }
 
 size_t map_strlen(const void *key) {
-    return strlen(key);
+    return strlen((const char*)(key));
 }
 
 map_t *make_map(size_t initial_capacity, map_hash_function hash) {
-    if (!hash) {
-        RET_PTR_ERROR(MAP_ERROR_INVALID);
-    }
     map_t *result = malloc(sizeof(map_t));
     if (!result) {
         RET_PTR_ERROR(MAP_ERROR_NOALLOC);
@@ -97,15 +105,13 @@ map_t *make_map(size_t initial_capacity, map_hash_function hash) {
 
     result->function_table.hash = hash ? hash : map_hash;
     result->function_table.length = NULL;
+    result->static_key_size = 0;
     result->element_count = 0;
 
     RET_SUCCESS(result);
 }
 
 map_t *map_create(size_t initial_capacity, map_hash_function hash, map_key_length_function get_key_length) {
-    if (!get_key_length) {
-        RET_PTR_ERROR(MAP_ERROR_INVALID);
-    }
     map_t *map = make_map(initial_capacity, hash);
     if (!map) {
         return NULL;
@@ -134,50 +140,46 @@ static size_t get_length(const map_t *map, const void *key) {
     return map->static_key_size;
 }
 
-static bool bucket_contains(const map_t *map, size_t location, const void *key, size_t key_hash) {
+static bool bucket_contains(const map_t *map, uint64_t location, map_key_t *key) {
     bucket_t *bucket = &map->buckets[location];
+
     if (bucket->pair_count == 0) {
         return false;
     }
 
-    size_t key_len = get_length(map, key);
-
     for (size_t i = 0; i < bucket->pair_count; i++) {
-        if (key_hash == bucket->hash_cache[i]
-            && key_len == get_length(map, bucket->data[i * 2])
-            && !memcmp(bucket->data[i * 2], key, key_len)) {
+        kvp_t *pair = &bucket->pairs[i];
+        if (key->hash == pair->key.hash
+            && key->len == pair->key.len
+            && !memcmp(pair->key.bytes, key, key->len)) {
             return true;
         }
     }
     return false;
 }
 
-static void *bucket_get(map_t *map, size_t location, void *key, size_t key_hash) {
+static void *bucket_get(map_t *map, uint64_t location, map_key_t *key) {
     bucket_t *bucket = &map->buckets[location];
     if (bucket->pair_count == 0) {
         RET_PTR_ERROR(MAP_ERROR_NOTFOUND);
     }
 
-    size_t key_len = get_length(map, key);
-    
     for (size_t i = 0; i < bucket->pair_count; i++) {
-        if (key_hash == bucket->hash_cache[i]
-            && key_len == get_length(map, bucket->data[i * 2])
-            && !memcmp(bucket->data[i * 2], key, key_len)) {
-            RET_SUCCESS(bucket->data[i * 2 + 1]);
+        kvp_t *pair = &bucket->pairs[i];
+        if (key->hash == pair->key.hash
+            && key->len == pair->key.len
+            && !memcmp(pair->key.bytes, key, key->len)) {
+            RET_SUCCESS(pair->value);
         }
     }
 
     RET_PTR_ERROR(MAP_ERROR_NOTFOUND);
 }
 
-static int bucket_direct_insert(bucket_t *bucket, void *key, size_t key_hash, void *value) {
+static int bucket_direct_insert(bucket_t *bucket, map_key_t *key, void *value) {
     if (bucket->pair_max == 0) {
-        bucket->data = malloc(default_pair_count * 2 * sizeof(void*));
-        bucket->hash_cache = malloc(default_pair_count * sizeof(size_t));
-        if (!bucket->data || !bucket->hash_cache) {
-            free(bucket->data);
-            free(bucket->hash_cache);
+        bucket->pairs = malloc(default_pair_count * sizeof(kvp_t));
+        if (!bucket->pairs) {
             RET_INT_ERROR(MAP_ERROR_NOALLOC);
         }
         bucket->pair_max = default_pair_count;
@@ -188,58 +190,46 @@ static int bucket_direct_insert(bucket_t *bucket, void *key, size_t key_hash, vo
             new_max *= 2;
         }
 
-        void **new_data = malloc(new_max * 2 * sizeof(void*));
-        size_t *new_hash_cache = malloc(new_max * sizeof(size_t));
-        if (!new_data || !new_hash_cache) {
-            free(new_data);
-            free(new_hash_cache);
+        kvp_t *new_pairs = realloc(bucket->pairs, new_max * sizeof(kvp_t));
+        if (!new_pairs) {
             RET_INT_ERROR(MAP_ERROR_NOALLOC);
         }
 
-        memcpy(new_data, bucket->data, bucket->pair_count * 2 * sizeof(void*));
-        memcpy(new_hash_cache, bucket->hash_cache, bucket->pair_count * sizeof(size_t));
-        free(bucket->data);
-        free(bucket->hash_cache);
-        bucket->data = new_data;
-        bucket->hash_cache = new_hash_cache;
+        bucket->pairs = new_pairs;
         bucket->pair_max = new_max;
     }
-    bucket->data[2 * bucket->pair_count] = key;
-    bucket->data[2 * bucket->pair_count + 1] = value;
-    bucket->hash_cache[bucket->pair_count] = key_hash;
+
+    bucket->pairs[bucket->pair_count].key = *key;
+    bucket->pairs[bucket->pair_count].value = value;
 
     bucket->pair_count++;
     RET_SUCCESS(0);
 }
 
-static int bucket_insert(map_t *map, size_t location, void *key, size_t hash, void *value) {
+static int bucket_insert(map_t *map, uint64_t location, map_key_t *key, void *value) {
     bucket_t *bucket = &map->buckets[location];
-    if (bucket_contains(map, location, key, hash)) {
+    if (bucket_contains(map, location, key)) {
         RET_INT_ERROR(MAP_ERROR_DUPE);
     }
-    return bucket_direct_insert(bucket, key, hash, value);
+    return bucket_direct_insert(bucket, key, value);
 }
 
-static int bucket_remove(map_t *map, size_t location, void *key, size_t key_hash) {
+static int bucket_remove(map_t *map, size_t location, map_key_t *key) {
     bucket_t *bucket = &map->buckets[location];
     if (bucket->pair_count == 0) {
         RET_INT_ERROR(MAP_ERROR_NOTFOUND);
     }
 
-    size_t key_len = get_length(map, key);
-
     for (size_t i = 0; i < bucket->pair_count; i++) {
-        if (key_hash == bucket->hash_cache[i]
-            && key_len == get_length(map, bucket->data[i * 2]) 
-            && !memcmp(key, bucket->data[i * 2], key_len)) {
-            memmove(&bucket->data[i * 2], &bucket->data[i * 2 + 2], 2 * sizeof(void*) * (bucket->pair_count - i - 1));
-            memmove(&bucket->hash_cache[i], &bucket->hash_cache[i + 1], sizeof(size_t) * (bucket->pair_count - i - 1));
+        kvp_t *pair = &bucket->pairs[i];
+        if (key->hash == pair->key.hash 
+            && key->len == pair->key.len 
+            && !memcmp(pair->key.bytes, key, key->len)) {
+            memmove(&bucket->pairs[i], &bucket->pairs[i + 1], bucket->pair_count - i);
             bucket->pair_count--;
-            map->element_count--;
             RET_SUCCESS(0);
         }
     }
-
     RET_INT_ERROR(MAP_ERROR_NOTFOUND);
 }
 
@@ -248,8 +238,7 @@ static void free_buckets(bucket_t *buckets, size_t bucket_count) {
         return;
     }
     for (size_t i = 0; i < bucket_count; i++) {
-        free(buckets[i].data);
-        free(buckets[i].hash_cache);
+        free(buckets[i].pairs);
     }
     free(buckets);
 }
@@ -266,10 +255,8 @@ static int map_rehash(map_t *map, size_t new_capacity) {
     for (size_t i = 0; i < map->bucket_count; i++) {
         bucket_t *bucket = &map->buckets[i];
         for (size_t j = 0; j < bucket->pair_count; j++) {
-            void *key = bucket->data[2 * j];
-            void *value = bucket->data[2 * j + 1];
-            size_t hash = bucket->hash_cache[j];
-            if (bucket_direct_insert(&new_buckets[hash % new_capacity], key, hash, value) < 0) {
+            uint64_t insert_at = bucket->pairs[j].key.hash % new_capacity; 
+            if (bucket_direct_insert(&new_buckets[insert_at], &bucket->pairs[j].key, bucket->pairs[j].value) < 0) {
                 free_buckets(new_buckets, new_capacity);
                 return -1; 
             }
@@ -291,14 +278,22 @@ int map_insert(map_t *map, void *key, void *value) {
         while (load_factor(map->element_count, new_capacity) >= load_max) {
             new_capacity *= 2;
         }
-        /* We ignore the return value from this, since if it fails we can just try again next time */
-        map_rehash(map, new_capacity);
+        if (map_rehash(map, new_capacity) < 0) {
+            return -1;
+        }
     }
 
-    size_t key_hash = map->function_table.hash(key, get_length(map, key));
-    size_t bucket_index = key_hash % map->bucket_count;
+    size_t key_length = get_length(map, key);
+    uint64_t key_hash = map->function_table.hash(key, key_length);
+    uint64_t bucket_index = key_hash % map->bucket_count;
 
-    int bucket_insert_retval = bucket_insert(map, bucket_index, key, key_hash, value);
+    map_key_t key_to_insert = {
+        .bytes = key,
+        .len = key_length,
+        .hash = key_hash,
+    };
+
+    int bucket_insert_retval = bucket_insert(map, bucket_index, &key_to_insert, value);
     if (bucket_insert_retval < 0) {
         return -1;
     }
@@ -308,29 +303,57 @@ int map_insert(map_t *map, void *key, void *value) {
 
 bool map_contains(map_t *map, void *key) {
     if (!map) {
-        RET_INT_ERROR(MAP_ERROR_INVALID);
+        error_code = MAP_ERROR_INVALID;
+        return false;
     }
-    size_t hash = map->function_table.hash(key, get_length(map, key));
-    size_t bucket_index = hash % map->bucket_count;
-    return bucket_contains(map, bucket_index, key, hash);
+
+    size_t length = get_length(map, key);
+    uint64_t hash = map->function_table.hash(key, length);
+    uint64_t bucket_index = hash % map->bucket_count;
+
+    map_key_t key_to_check = {
+        .bytes = key,
+        .len = length,
+        .hash = hash,
+    };
+
+    return bucket_contains(map, bucket_index, &key_to_check);
 }
 
 void *map_get(map_t *map, void *key) {
     if (!map) {
         RET_PTR_ERROR(MAP_ERROR_INVALID);
     }
-    size_t hash = map->function_table.hash(key, get_length(map, key));
-    size_t bucket_index = hash % map->bucket_count;
-    return bucket_get(map, bucket_index, key, hash);
+
+    size_t length = get_length(map, key);
+    uint64_t hash = map->function_table.hash(key, length);
+    uint64_t bucket_index = hash % map->bucket_count;
+
+    map_key_t key_to_check = {
+        .bytes = key,
+        .len = length,
+        .hash = hash,
+    };
+
+    return bucket_get(map, bucket_index, &key_to_check);
 }
 
 int map_remove(map_t *map, void *key) {
     if (!map) {
         RET_INT_ERROR(MAP_ERROR_INVALID);
     }
-    size_t hash = map->function_table.hash(key, get_length(map, key));
-    size_t bucket_index = hash % map->bucket_count;
-    return bucket_remove(map, bucket_index, key, hash);
+
+    size_t length = get_length(map, key);
+    uint64_t hash = map->function_table.hash(key, length);
+    uint64_t bucket_index = hash % map->bucket_count;
+
+    map_key_t key_to_check = {
+        .bytes = key,
+        .len = length,
+        .hash = hash,
+    };
+
+    return bucket_remove(map, bucket_index, &key_to_check);
 }
 
 void map_free(map_t *map) {
