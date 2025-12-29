@@ -107,6 +107,9 @@ int map_next(map_iterator_t *iterator);
 */
 int map_get_pair(map_iterator_t *iterator, void **key, void **value);
 
+/*
+    Determine if two map_iterator_t compare equal.
+*/
 bool iterator_equal(map_iterator_t *a, map_iterator_t *b);
 
 /*

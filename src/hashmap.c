@@ -449,6 +449,9 @@ int map_get_pair(map_iterator_t *iterator, void **key, void **value) {
 }
 
 bool iterator_equal(map_iterator_t *a, map_iterator_t *b) {
+    if (!a || !b) {
+        return false;
+    }
     return !memcmp(a, b, sizeof(map_iterator_t));
 }
 
