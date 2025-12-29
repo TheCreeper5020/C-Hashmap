@@ -9,16 +9,18 @@
     Error handling for the hashmap library
 */
 
-#define MAP_ERROR_OK        0
-#define MAP_ERROR_NOALLOC   1
-#define MAP_ERROR_INVALID   2
-#define MAP_ERROR_DUPE      3
-#define MAP_ERROR_NOTFOUND  4
+#define MAP_ERROR_OK            0
+#define MAP_ERROR_NOALLOC       1
+#define MAP_ERROR_INVALID       2
+#define MAP_ERROR_DUPE          3
+#define MAP_ERROR_NOTFOUND      4
+#define MAP_ERROR_OUT_OF_BOUNDS 5
 
 int map_last_error();
 const char *map_str_error(int error_code);
 
 typedef struct map_t map_t;
+typedef struct map_iterator_t map_iterator_t;
 
 typedef uint64_t    (*map_hash_function)(const void*, size_t);
 typedef size_t      (*map_key_length_function)(const void*);
@@ -82,5 +84,30 @@ int map_remove(map_t *map, void *key);
     If you do not call this, you will have a memory leak!
 */
 void map_free(map_t *map);
+
+/*
+    Create an iterator over `map` at the start
+*/
+map_iterator_t *map_begin(map_t *map);
+
+/*
+    Create an iterator over `map` at the end
+*/
+map_iterator_t *map_end(map_t *map);
+
+/*
+    Move `iterator` forward one unit in the map. Returns -1 if attempting to go past map_end()
+*/
+int map_next(map_iterator_t *iterator);
+
+/*
+    Move `iterator` backward one unit in the map. Returns -1 if attempting to go past map_begin()
+*/
+int map_prev(map_iterator_t *iterator);
+
+/*
+    Free any memory associated with `iterator`
+*/
+void map_iterator_free(map_iterator_t *iterator);
 
 #endif

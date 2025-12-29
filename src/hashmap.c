@@ -61,6 +61,8 @@ const char *map_str_error(int error_code) {
             return "Element not found within map";
         case MAP_ERROR_DUPE:
             return "Attempt to insert a duplicate element";
+        case MAP_ERROR_OUT_OF_BOUNDS:
+            return "Attempt to access out of bounds memory region";
         default:
             return "Unknown error code";
     }
