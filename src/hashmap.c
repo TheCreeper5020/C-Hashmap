@@ -429,7 +429,7 @@ int map_next(map_iterator_t *iterator) {
         iterator->current_bucket = find_next_nonempty_bucket(iterator->map, iterator->current_bucket + 1);
         iterator->current_pair = 0;
     }
-    RET_SUCCESS(0)
+    RET_SUCCESS(0);
 }
 
 int map_get_pair(map_iterator_t *iterator, void **key, void **value) {
@@ -446,6 +446,10 @@ int map_get_pair(map_iterator_t *iterator, void **key, void **value) {
     *value = pair->value;
 
     RET_SUCCESS(0);
+}
+
+bool iterator_equal(map_iterator_t *a, map_iterator_t *b) {
+    return !memcmp(a, b, sizeof(map_iterator_t));
 }
 
 void map_iterator_free(map_iterator_t *iterator) {
