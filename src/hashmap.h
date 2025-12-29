@@ -4,6 +4,19 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+/*
+    Error handling for the hashmap library
+*/
+
+#define MAP_ERROR_OK        0
+#define MAP_ERROR_NOALLOC   1
+#define MAP_ERROR_INVALID   2
+#define MAP_ERROR_DUPE      3
+#define MAP_ERROR_NOTFOUND  4
+
+int map_last_error();
+char *map_str_error(int error_code);
+
 typedef struct map_t map_t;
 
 typedef size_t  (*map_hash_function)(const void*, size_t);
