@@ -447,3 +447,7 @@ int map_get_pair(map_iterator_t *iterator, void **key, void **value) {
 
     RET_SUCCESS(0);
 }
+
+void map_iterator_free(map_iterator_t *iterator) {
+    free(iterator);
+}
