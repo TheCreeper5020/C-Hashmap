@@ -88,7 +88,7 @@ size_t map_strlen(const void *key) {
     return strlen((const char*)(key));
 }
 
-map_t *make_map(size_t initial_capacity, map_hash_function hash) {
+static map_t *make_map(size_t initial_capacity, map_hash_function hash) {
     map_t *result = malloc(sizeof(map_t));
     if (!result) {
         RET_PTR_ERROR(MAP_ERROR_NOALLOC);
