@@ -23,7 +23,7 @@ typedef struct map_t map_t;
 typedef struct map_iterator_t map_iterator_t;
 
 typedef uint64_t    (*map_hash_function)(const void*, size_t);
-typedef size_t      (*map_key_length_function)(const void*);
+typedef size_t      (*map_length_function)(const void*);
 
 /*
     Hashes a `key` of given `size`.
@@ -38,21 +38,54 @@ uint64_t map_hash(const void *key, size_t size);
 size_t map_strlen(const void *key);
 
 /*
-    Allocates memory for and creates a map.
-    `initial_capacity` specifies how many buckets the map should have initially.
-        If set to zero, then the implementation chooses a default size.
-    `hash_key` is a function for hashing a key. If set to NULL, it will be as if you passed `map_hash`
-    `get_key_length` is a function for computing the key length of a key, for hashing and comparison
-        If set to NULL, it will be as if you passed `map_strlen`.
+    dynamic key/value size overload of map_create, see map_create for more details
 */
-map_t *map_create(size_t initial_capacity, map_hash_function hash, map_key_length_function get_key_length);
+map_t *map_create_dd(size_t initial_capacity, map_hash_function hash, map_length_function get_key_length, map_length_function get_value_length);
 
 /*
-    This function is analogous to `map_create`, except instead of specifying a function to compute the length of keys,
-    it accepts the key size upfront. This should be used when the key size doesn't differ between keys (e.g. if keys
-    are integers, but not if they are strings)
+    dynamic key size overload of map_create, with value size fixed, see map_create for more details
 */
-map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t key_length);
+map_t *map_create_ds(size_t initial_capacity, map_hash_function hash, map_length_function get_key_length, size_t value_length);
+
+/*
+    dynamic value size overload of map_create, with key size fixed, see map_create for more details
+*/
+map_t *map_create_sd(size_t initial_capacity, map_hash_function hash, size_t key_length, map_length_function get_value_length);
+
+/*
+    static key/value size overload of map_create, see map_create for more details
+*/
+map_t *map_create_ss(size_t initial_capacity, map_hash_function hash, size_t key_length, size_t value_length);
+
+/*
+    Create a map.
+    `initial_capacity` specifies the initial capacity of the map, or 0 to let the library
+    choose a size.
+    `hash_function` specifies a hash function to use, or NULL to use map_hash
+    `key_length` is either a nonzero size_t specifying the size of a key, or a pointer
+    to a function which accepts a `const void*` and returns the size of a key. If a NULL
+    pointer is specified, map_strlen is used.
+    `value_length` specifies the size of a value in the same way key_length does. 
+    Note that you might need to cast key_length or value_length to size_t if passing
+    an integer directly
+*/
+#define map_create(initial_capacity, hash_function, key_length, value_length) _Generic((key_length),\
+    size_t: _Generic((value_length),\
+        size_t: map_create_ss,\
+        map_length_function: map_create_sd,\
+        void*: map_create_sd\
+    ),\
+    map_length_function: _Generic((value_length),\
+        size_t: map_create_ds,\
+        map_length_function: map_create_dd,\
+        void*: map_create_dd\
+    ),\
+    void*: _Generic((value_length),\
+        size_t: map_create_ds,\
+        map_length_function: map_create_dd,\
+        void*: map_create_dd\
+    )\
+)((initial_capacity), (hash_function), (key_length), (value_length))
 
 /*
     Inserts `key` into `map` and associates it with `value`.
@@ -78,6 +111,28 @@ void *map_get(map_t *map, void *key);
     Returns -1 if `key` does not exist in `map`.
 */
 int map_remove(map_t *map, void *key);
+
+/*
+    Clear all elements from map, and set its size to zero.
+    This also frees some memory.
+*/
+void map_clear(map_t *map);
+
+/*
+    Tests if map_size would return 0 (the map has no keys associated with any values)
+*/
+bool map_empty(map_t *map);
+
+/*
+    Tests if two maps are equivalent (i.e. they contain the same keys and the same keys are
+    associated with the same values)
+*/
+bool map_equal(map_t *a, map_t *b);
+
+/*
+    Obtains the size of the map.
+*/
+size_t map_size(map_t *map);
 
 /*
     This function frees a map.

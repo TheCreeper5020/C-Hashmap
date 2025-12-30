@@ -14,15 +14,20 @@ static const size_t load_max = 75;
 static const size_t default_initial_capacity = 64;
 static const size_t default_pair_count = 4;
 
-typedef struct map_key_t {
+typedef struct map_data_t {
     void *bytes;
-    uint64_t hash;
     size_t len;
+} map_data_t;
+
+typedef struct map_key_t {
+    map_data_t data;
+    uint64_t hash;
 } map_key_t;
 
 typedef struct kvp_t {
     map_key_t key;
-    void *value;
+    map_data_t value;
+    bool copied;
 } kvp_t;
 
 typedef struct bucket_t {
@@ -32,13 +37,15 @@ typedef struct bucket_t {
 
 typedef struct map_fp_table_t {
     map_hash_function hash;
-    map_key_length_function length;
+    map_length_function key_length;
+    map_length_function value_length;
 } map_fp_table_t;
 
 struct map_t {
     bucket_t        *buckets;
     size_t          bucket_count;
-    size_t          static_key_size; // if zero, call function_table.length()
+    size_t          static_key_size;
+    size_t          static_value_size;
     size_t          element_count;
     map_fp_table_t  function_table;
 };
@@ -111,24 +118,39 @@ static map_t *make_map(size_t initial_capacity, map_hash_function hash) {
     result->bucket_count = initial_capacity;
 
     result->function_table.hash = hash ? hash : map_hash;
-    result->function_table.length = NULL;
+    result->function_table.key_length = NULL;
+    result->function_table.value_length = NULL;
     result->static_key_size = 0;
+    result->static_value_size = 0;
     result->element_count = 0;
 
     RET_SUCCESS(result);
 }
 
-map_t *map_create(size_t initial_capacity, map_hash_function hash, map_key_length_function get_key_length) {
+map_t *map_create_dd(size_t initial_capacity, map_hash_function hash, map_length_function get_key_length, map_length_function get_value_length) {
     map_t *map = make_map(initial_capacity, hash);
     if (!map) {
         return NULL;
     }
-    map->static_key_size = 0;
-    map->function_table.length = get_key_length ? get_key_length : map_strlen;
+    map->function_table.key_length = get_key_length ? get_key_length : map_strlen;
+    map->function_table.value_length = get_value_length ? get_value_length : map_strlen;
     return map;
 }
 
-map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t key_length) {
+map_t *map_create_ds(size_t initial_capacity, map_hash_function hash, map_length_function get_key_length, size_t value_length) {
+    if (value_length == 0) {
+        RET_PTR_ERROR(MAP_ERROR_INVALID);
+    }
+    map_t *map = make_map(initial_capacity, hash);
+    if (!map) {
+        return NULL;
+    }
+    map->function_table.key_length = get_key_length;
+    map->static_value_size = value_length;
+    return map;
+}
+
+map_t *map_create_sd(size_t initial_capacity, map_hash_function hash, size_t key_length, map_length_function get_value_length) {
     if (key_length == 0) {
         RET_PTR_ERROR(MAP_ERROR_INVALID);
     }
@@ -137,53 +159,82 @@ map_t *map_create_static(size_t initial_capacity, map_hash_function hash, size_t
         return NULL;
     }
     map->static_key_size = key_length;
+    map->function_table.value_length = get_value_length;
     return map;
 }
 
-static size_t get_length(const map_t *map, const void *key) {
+map_t *map_create_ss(size_t initial_capacity, map_hash_function hash, size_t key_length, size_t value_length) {
+    if (key_length == 0 || value_length == 0) {
+        RET_PTR_ERROR(MAP_ERROR_INVALID);
+    }
+    map_t *map = make_map(initial_capacity, hash);
+    if (!map) {
+        return NULL;
+    }
+    map->static_key_size = key_length;
+    map->static_value_size = value_length;
+    return map;
+}
+
+static size_t get_key_length(const map_t *map, const void *key) {
     if (map->static_key_size == 0) {
-        return map->function_table.length(key);
+        return map->function_table.key_length(key);
     }
     return map->static_key_size;
 }
 
-static bool bucket_contains(const map_t *map, uint64_t location, map_key_t *key) {
-    bucket_t *bucket = &map->buckets[location];
-
-    if (bucket->pair_count == 0) {
-        return false;
+static size_t get_value_length(const map_t *map, const void *value) {
+    if (map->static_value_size == 0) {
+        return map->function_table.value_length(value);
     }
-
-    for (size_t i = 0; i < bucket->pair_count; i++) {
-        kvp_t *pair = &bucket->pairs[i];
-        if (key->hash == pair->key.hash
-            && key->len == pair->key.len
-            && !memcmp(pair->key.bytes, key->bytes, key->len)) {
-            return true;
-        }
-    }
-    return false;
+    return map->static_value_size;
 }
 
-static void *bucket_get(map_t *map, uint64_t location, map_key_t *key) {
-    bucket_t *bucket = &map->buckets[location];
+static bool key_equal(const map_key_t *a, const map_key_t *b) {
+    return a->hash == b->hash 
+        && a->data.len == b->data.len
+        && !memcmp(a->data.bytes, b->data.bytes, a->data.len);
+}
+
+static bool value_equal(const map_data_t *a, const map_data_t *b) {
+    return a->len == b->len && !memcmp(a->bytes, b->bytes, a->len);
+}
+
+static map_data_t *bucket_get(bucket_t *bucket, map_key_t *key) {
     if (bucket->pair_count == 0) {
         RET_PTR_ERROR(MAP_ERROR_NOTFOUND);
     }
 
     for (size_t i = 0; i < bucket->pair_count; i++) {
         kvp_t *pair = &bucket->pairs[i];
-        if (key->hash == pair->key.hash
-            && key->len == pair->key.len
-            && !memcmp(pair->key.bytes, key->bytes, key->len)) {
-            RET_SUCCESS(pair->value);
+        if (key_equal(key, &pair->key)) {
+            RET_SUCCESS(&pair->value);
         }
     }
 
     RET_PTR_ERROR(MAP_ERROR_NOTFOUND);
 }
 
-static int bucket_direct_insert(bucket_t *bucket, map_key_t *key, void *value) {
+static bool bucket_contains(bucket_t *bucket, map_key_t *key) {
+    return bucket_get(bucket, key) ? true : false;
+}
+
+static int bucket_resize(bucket_t *bucket, size_t new_max) {
+    kvp_t *new_pairs = realloc(bucket->pairs, new_max * sizeof(kvp_t));
+    if (!new_pairs) {
+        RET_INT_ERROR(MAP_ERROR_NOALLOC);
+    }
+
+    bucket->pairs = new_pairs;
+    bucket->pair_max = new_max;
+    RET_SUCCESS(0);
+}
+
+// ensure the bucket has at least cap_at_least slots for elements
+static int bucket_ensure(bucket_t *bucket, size_t cap_at_least) {
+    if (cap_at_least == 0) {
+        RET_SUCCESS(0);
+    }
     if (bucket->pair_max == 0) {
         bucket->pairs = malloc(default_pair_count * sizeof(kvp_t));
         if (!bucket->pairs) {
@@ -191,47 +242,47 @@ static int bucket_direct_insert(bucket_t *bucket, map_key_t *key, void *value) {
         }
         bucket->pair_max = default_pair_count;
     }
-    if (bucket->pair_count >= bucket->pair_max) {
+    if (cap_at_least >= bucket->pair_max) {
         size_t new_max = bucket->pair_max * 2;
-        while (bucket->pair_count >= new_max) {
+        while (cap_at_least >= new_max) {
             new_max *= 2;
         }
-
-        kvp_t *new_pairs = realloc(bucket->pairs, new_max * sizeof(kvp_t));
-        if (!new_pairs) {
-            RET_INT_ERROR(MAP_ERROR_NOALLOC);
+        if (bucket_resize(bucket, new_max) < 0) {
+            return -1;
         }
+    }
+    RET_SUCCESS(0);
+}
 
-        bucket->pairs = new_pairs;
-        bucket->pair_max = new_max;
+static int bucket_insert(bucket_t *bucket, map_key_t *key, map_data_t *value, bool copy) {
+    if (bucket_contains(bucket, key)) {
+        RET_INT_ERROR(MAP_ERROR_DUPE);
+    }
+
+    if (bucket_ensure(bucket, bucket->pair_count) < 0) {
+        return -1;
     }
 
     bucket->pairs[bucket->pair_count].key = *key;
-    bucket->pairs[bucket->pair_count].value = value;
+    bucket->pairs[bucket->pair_count].value = *value;
+    bucket->pairs[bucket->pair_count].copied = copy;
 
     bucket->pair_count++;
     RET_SUCCESS(0);
 }
 
-static int bucket_insert(map_t *map, uint64_t location, map_key_t *key, void *value) {
-    bucket_t *bucket = &map->buckets[location];
-    if (bucket_contains(map, location, key)) {
-        RET_INT_ERROR(MAP_ERROR_DUPE);
-    }
-    return bucket_direct_insert(bucket, key, value);
-}
-
-static int bucket_remove(map_t *map, size_t location, map_key_t *key) {
-    bucket_t *bucket = &map->buckets[location];
+static int bucket_remove(bucket_t *bucket, map_key_t *key) {
     if (bucket->pair_count == 0) {
         RET_INT_ERROR(MAP_ERROR_NOTFOUND);
     }
 
     for (size_t i = 0; i < bucket->pair_count; i++) {
         kvp_t *pair = &bucket->pairs[i];
-        if (key->hash == pair->key.hash 
-            && key->len == pair->key.len 
-            && !memcmp(pair->key.bytes, key->bytes, key->len)) {
+        if (key_equal(key, &pair->key)) {
+            if (pair->copied) {
+                free(pair->key.data.bytes);
+                free(pair->value.bytes);
+            }
             memmove(&bucket->pairs[i], &bucket->pairs[i + 1], sizeof(kvp_t) * (bucket->pair_count - i - 1));
             bucket->pair_count--;
             RET_SUCCESS(0);
@@ -240,12 +291,22 @@ static int bucket_remove(map_t *map, size_t location, map_key_t *key) {
     RET_INT_ERROR(MAP_ERROR_NOTFOUND);
 }
 
+static void free_bucket(bucket_t *bucket) {
+    for (size_t i = 0; i < bucket->pair_count; i++) {
+        if (bucket->pairs[i].copied) {
+            free(bucket->pairs[i].key.data.bytes);
+            free(bucket->pairs[i].value.bytes);
+        }
+    }
+    free(bucket->pairs);
+}
+
 static void free_buckets(bucket_t *buckets, size_t bucket_count) {
     if (!buckets) {
         return;
     }
     for (size_t i = 0; i < bucket_count; i++) {
-        free(buckets[i].pairs);
+        free_bucket(&buckets[i]);
     }
     free(buckets);
 }
@@ -262,15 +323,30 @@ static int map_rehash(map_t *map, size_t new_capacity) {
     for (size_t i = 0; i < map->bucket_count; i++) {
         bucket_t *bucket = &map->buckets[i];
         for (size_t j = 0; j < bucket->pair_count; j++) {
-            uint64_t insert_at = bucket->pairs[j].key.hash % new_capacity; 
-            if (bucket_direct_insert(&new_buckets[insert_at], &bucket->pairs[j].key, bucket->pairs[j].value) < 0) {
-                free_buckets(new_buckets, new_capacity);
+            kvp_t *pair = &bucket->pairs[j];
+
+            map_key_t *key = &pair->key;
+            map_data_t *value = &pair->value;
+
+            uint64_t insert_at = key->hash % new_capacity; 
+
+            if (bucket_insert(&new_buckets[insert_at], key, value, pair->copied) < 0) {
+                /* We cannot use free_buckets because it would leave the map in an inconsistent
+                state. */
+                for (size_t i = 0; i < new_capacity; i++) {
+                    free(new_buckets[i].pairs);
+                }
+                free(new_buckets);
                 return -1; 
             }
         }
     }
 
-    free_buckets(map->buckets, map->bucket_count);
+    for (size_t i = 0; i < map->bucket_count; i++) {
+        free(map->buckets[i].pairs);
+    }
+    free(map->buckets);
+
     map->buckets = new_buckets;
     map->bucket_count = new_capacity;
     RET_SUCCESS(0);
@@ -290,18 +366,24 @@ int map_insert(map_t *map, void *key, void *value) {
         }
     }
 
-    size_t key_length = get_length(map, key);
+    size_t key_length = get_key_length(map, key);
     uint64_t key_hash = map->function_table.hash(key, key_length);
     uint64_t bucket_index = key_hash % map->bucket_count;
 
+    size_t value_length = get_value_length(map, value);
+
     map_key_t key_to_insert = {
-        .bytes = key,
-        .len = key_length,
+        .data = {
+            .bytes = key, .len = key_length
+        },
         .hash = key_hash,
     };
 
-    int bucket_insert_retval = bucket_insert(map, bucket_index, &key_to_insert, value);
-    if (bucket_insert_retval < 0) {
+    map_data_t value_to_insert = {
+        .bytes = value, .len = value_length,
+    };
+
+    if (bucket_insert(&map->buckets[bucket_index], &key_to_insert, value, false) < 0) {
         return -1;
     }
     map->element_count++;
@@ -314,17 +396,18 @@ bool map_contains(map_t *map, void *key) {
         return false;
     }
 
-    size_t length = get_length(map, key);
+    size_t length = get_key_length(map, key);
     uint64_t hash = map->function_table.hash(key, length);
     uint64_t bucket_index = hash % map->bucket_count;
 
     map_key_t key_to_check = {
-        .bytes = key,
-        .len = length,
+        .data = {
+            .bytes = key, .len = length
+        },
         .hash = hash,
     };
 
-    return bucket_contains(map, bucket_index, &key_to_check);
+    return bucket_contains(&map->buckets[bucket_index], &key_to_check);
 }
 
 void *map_get(map_t *map, void *key) {
@@ -332,17 +415,22 @@ void *map_get(map_t *map, void *key) {
         RET_PTR_ERROR(MAP_ERROR_INVALID);
     }
 
-    size_t length = get_length(map, key);
+    size_t length = get_key_length(map, key);
     uint64_t hash = map->function_table.hash(key, length);
     uint64_t bucket_index = hash % map->bucket_count;
 
     map_key_t key_to_check = {
-        .bytes = key,
-        .len = length,
+        .data = {
+            .bytes = key, .len = length
+        },
         .hash = hash,
     };
 
-    return bucket_get(map, bucket_index, &key_to_check);
+    map_data_t *data = bucket_get(&map->buckets[bucket_index], &key_to_check);
+    if (!data) {
+        return NULL;
+    }
+    return data->bytes;
 }
 
 int map_remove(map_t *map, void *key) {
@@ -350,21 +438,61 @@ int map_remove(map_t *map, void *key) {
         RET_INT_ERROR(MAP_ERROR_INVALID);
     }
 
-    size_t length = get_length(map, key);
+    size_t length = get_key_length(map, key);
     uint64_t hash = map->function_table.hash(key, length);
     uint64_t bucket_index = hash % map->bucket_count;
 
     map_key_t key_to_check = {
-        .bytes = key,
-        .len = length,
+        .data = {
+            .bytes = key, .len = length
+        },
         .hash = hash,
     };
 
-    if (bucket_remove(map, bucket_index, &key_to_check) < 0) {
+    if (bucket_remove(&map->buckets[bucket_index], &key_to_check) < 0) {
         return -1;
     }
     map->element_count--;
     RET_SUCCESS(0);
+}
+
+void map_clear(map_t *map) {
+    if (!map) {
+        return;
+    }
+
+    map->element_count = 0;
+    for (size_t i = 0; i < map->bucket_count; i++) {
+        free_bucket(&map->buckets[i]);
+        map->buckets[i].pairs = NULL;
+        map->buckets[i].pair_count = map->buckets[i].pair_max = 0;
+    }
+}
+
+bool map_empty(map_t *map) {
+    return map->element_count == 0;
+}
+
+bool map_equal(map_t *a, map_t *b) {
+    for (size_t i = 0; i < a->bucket_count; i++) {
+        bucket_t *bucket = &a->buckets[i];
+        for (size_t j = 0; j < bucket->pair_count; j++) {
+            kvp_t *pair = &bucket->pairs[j];
+
+            size_t b_location = pair->key.hash % b->bucket_count;
+
+            map_data_t *value = bucket_get(&b->buckets[b_location], &pair->key);
+
+            if (!value || !value_equal(&pair->value, value)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+size_t map_size(map_t *map) {
+    return map->element_count;
 }
 
 void map_free(map_t *map) {
@@ -442,8 +570,8 @@ int map_get_pair(map_iterator_t *iterator, void **key, void **value) {
     }
 
     kvp_t *pair = &iterator->map->buckets[iterator->current_bucket].pairs[iterator->current_pair];
-    *key = pair->key.bytes;
-    *value = pair->value;
+    *key = pair->key.data.bytes;
+    *value = pair->value.bytes;
 
     RET_SUCCESS(0);
 }
