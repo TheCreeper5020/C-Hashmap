@@ -23,6 +23,7 @@ typedef struct map_t map_t;
 typedef struct map_iterator_t map_iterator_t;
 
 typedef uint64_t    (*map_hash_function)(const void*, size_t);
+typedef int         (*map_foreach_function)(const void*, const void*);
 typedef size_t      (*map_length_function)(const void*);
 
 /*
@@ -32,8 +33,9 @@ typedef size_t      (*map_length_function)(const void*);
 uint64_t map_hash(const void *key, size_t size);
 
 /*
-    Wrapper around strlen accepting const void* instead of const char*
-    The key is expected to be terminated by a NULL byte.
+    Wrapper around strlen which accepts a const void* and adds 1 to include the null terminator.
+    Equivalent to strlen(key) + 1.
+    The key is expected to be terminated by a null byte.
 */
 size_t map_strlen(const void *key);
 
@@ -94,6 +96,12 @@ map_t *map_create_ss(size_t initial_capacity, map_hash_function hash, size_t key
     is deallocated, the map will have a dangling pointer. Ensure that memory in the map outlives the map.
 */
 int map_insert(map_t *map, void *key, void *value);
+
+/*
+    Analogous to `map_insert` except it copies its key/value into the map insetead of storing a reference,
+    thus making it safe to destroy key or value after the call.
+*/
+int map_insert_copy(map_t *map, void *key, void *value);
 
 /*
     returns true if `key` occurs in `map`, otherwise false
@@ -171,5 +179,13 @@ bool map_iterator_equal(map_iterator_t *a, map_iterator_t *b);
     Free any memory associated with `iterator`
 */
 void map_iterator_free(map_iterator_t *iterator);
+
+/*
+    Execute `function` once for each key/value pair in `map`.
+    A return value of 0 from `function` indicates that the function
+    should continue. A return value of `1` signals that it should break.
+    Returns the last return value captured from `function`.
+*/
+int map_foreach(map_t *map, map_foreach_function function);
 
 #endif

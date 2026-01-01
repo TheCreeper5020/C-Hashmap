@@ -99,7 +99,7 @@ uint64_t map_hash(const void *key, size_t size) {
 }
 
 size_t map_strlen(const void *key) {
-    return strlen((const char*)(key));
+    return strlen((const char*)(key)) + 1;
 }
 
 static map_t *make_map(size_t initial_capacity, map_hash_function hash) {
@@ -390,6 +390,54 @@ int map_insert(map_t *map, void *key, void *value) {
     RET_SUCCESS(0);
 }
 
+int map_insert_copy(map_t *map, void *key, void *value) {
+    if (!map) {
+        RET_INT_ERROR(MAP_ERROR_INVALID);
+    }
+    if (load_factor(map->element_count, map->bucket_count) >= load_max) {
+        size_t new_capacity = map->bucket_count * 2;
+        while (load_factor(map->element_count, new_capacity) >= load_max) {
+            new_capacity *= 2;
+        }
+        if (map_rehash(map, new_capacity) < 0) {
+            return -1;
+        }
+    }
+    size_t key_length = get_key_length(map, key);
+    uint64_t key_hash = map->function_table.hash(key, key_length);
+    uint64_t bucket_index = key_hash % map->bucket_count;
+
+    size_t value_length = get_value_length(map, value);
+
+    map_key_t key_to_insert = {
+        .data = {
+            .bytes = malloc(key_length),
+            .len = key_length,
+        },
+        .hash = key_hash,
+    };
+    if (!key_to_insert.data.bytes) {
+        RET_INT_ERROR(MAP_ERROR_NOALLOC);
+    }
+    memcpy(key_to_insert.data.bytes, key, key_length);
+
+    map_data_t value_to_insert = {
+        .bytes = malloc(value_length),
+        .len = value_length
+    };
+    if (!value_to_insert.bytes) {
+        free(key_to_insert.data.bytes);
+        RET_INT_ERROR(MAP_ERROR_NOALLOC);
+    }
+    memcpy(value_to_insert.bytes, value, value_length);
+
+    if (bucket_insert(&map->buckets[bucket_index], &key_to_insert, &value_to_insert, true) < 0) {
+        return -1;
+    }
+    map->element_count++;
+    RET_SUCCESS(0);
+}
+
 bool map_contains(map_t *map, void *key) {
     if (!map) {
         error_code = MAP_ERROR_INVALID;
@@ -585,4 +633,19 @@ bool map_iterator_equal(map_iterator_t *a, map_iterator_t *b) {
 
 void map_iterator_free(map_iterator_t *iterator) {
     free(iterator);
+}
+
+int map_foreach(map_t *map, map_foreach_function function) {
+    int retval = 0;
+    for (size_t i = 0; i < map->bucket_count; i++) {
+        bucket_t *bucket = &map->buckets[i];
+        for (size_t j = 0; j < bucket->pair_count; j++) {
+            kvp_t *pair = &bucket->pairs[j];
+            retval = function(pair->key.data.bytes, pair->value.bytes);
+            if (retval == 1) {
+                return retval;
+            }
+        }
+    }
+    return retval;
 }
