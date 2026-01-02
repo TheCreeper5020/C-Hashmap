@@ -201,10 +201,6 @@ static bool value_equal(const map_data_t *a, const map_data_t *b) {
 }
 
 static map_data_t *bucket_get(bucket_t *bucket, map_key_t *key) {
-    if (bucket->pair_count == 0) {
-        RET_PTR_ERROR(MAP_ERROR_NOTFOUND);
-    }
-
     for (size_t i = 0; i < bucket->pair_count; i++) {
         kvp_t *pair = &bucket->pairs[i];
         if (key_equal(key, &pair->key)) {
@@ -216,7 +212,14 @@ static map_data_t *bucket_get(bucket_t *bucket, map_key_t *key) {
 }
 
 static bool bucket_contains(bucket_t *bucket, map_key_t *key) {
-    return bucket_get(bucket, key) ? true : false;
+    for (size_t i = 0; i < bucket->pair_count; i++) {
+        kvp_t *pair = &bucket->pairs[i];
+        if (key_equal(key, &pair->key)) {
+            return true;     
+        }
+    }
+
+    return false;
 }
 
 static int bucket_resize(bucket_t *bucket, size_t new_max) {
@@ -383,7 +386,7 @@ int map_insert(map_t *map, void *key, void *value) {
         .bytes = value, .len = value_length,
     };
 
-    if (bucket_insert(&map->buckets[bucket_index], &key_to_insert, value, false) < 0) {
+    if (bucket_insert(&map->buckets[bucket_index], &key_to_insert, &value_to_insert, false) < 0) {
         return -1;
     }
     map->element_count++;
@@ -432,6 +435,8 @@ int map_insert_copy(map_t *map, void *key, void *value) {
     memcpy(value_to_insert.bytes, value, value_length);
 
     if (bucket_insert(&map->buckets[bucket_index], &key_to_insert, &value_to_insert, true) < 0) {
+        free(key_to_insert.data.bytes);
+        free(value_to_insert.bytes);
         return -1;
     }
     map->element_count++;
@@ -440,7 +445,6 @@ int map_insert_copy(map_t *map, void *key, void *value) {
 
 bool map_contains(map_t *map, void *key) {
     if (!map) {
-        error_code = MAP_ERROR_INVALID;
         return false;
     }
 
@@ -518,10 +522,17 @@ void map_clear(map_t *map) {
 }
 
 bool map_empty(map_t *map) {
+    if (!map) {
+        return true;
+    }
     return map->element_count == 0;
 }
 
 bool map_equal(map_t *a, map_t *b) {
+    if (a->element_count != b->element_count) {
+        return false;
+    }
+
     for (size_t i = 0; i < a->bucket_count; i++) {
         bucket_t *bucket = &a->buckets[i];
         for (size_t j = 0; j < bucket->pair_count; j++) {

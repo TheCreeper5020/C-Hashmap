@@ -23,7 +23,7 @@ typedef struct map_t map_t;
 typedef struct map_iterator_t map_iterator_t;
 
 typedef uint64_t    (*map_hash_function)(const void*, size_t);
-typedef int         (*map_foreach_function)(const void*, const void*);
+typedef int         (*map_foreach_function)(void*, void*);
 typedef size_t      (*map_length_function)(const void*);
 
 /*
