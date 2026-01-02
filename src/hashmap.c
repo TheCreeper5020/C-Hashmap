@@ -145,7 +145,7 @@ map_t *map_create_ds(size_t initial_capacity, map_hash_function hash, map_length
     if (!map) {
         return NULL;
     }
-    map->function_table.key_length = get_key_length;
+    map->function_table.key_length = get_key_length ? get_key_length : map_strlen;
     map->static_value_size = value_length;
     return map;
 }
@@ -159,7 +159,7 @@ map_t *map_create_sd(size_t initial_capacity, map_hash_function hash, size_t key
         return NULL;
     }
     map->static_key_size = key_length;
-    map->function_table.value_length = get_value_length;
+    map->function_table.value_length = get_value_length ? get_value_length : map_strlen;
     return map;
 }
 
@@ -245,7 +245,7 @@ static int bucket_ensure(bucket_t *bucket, size_t cap_at_least) {
         }
         bucket->pair_max = default_pair_count;
     }
-    if (cap_at_least >= bucket->pair_max) {
+    if (cap_at_least > bucket->pair_max) {
         size_t new_max = bucket->pair_max * 2;
         while (cap_at_least >= new_max) {
             new_max *= 2;
@@ -262,7 +262,7 @@ static int bucket_insert(bucket_t *bucket, map_key_t *key, map_data_t *value, bo
         RET_INT_ERROR(MAP_ERROR_DUPE);
     }
 
-    if (bucket_ensure(bucket, bucket->pair_count) < 0) {
+    if (bucket_ensure(bucket, bucket->pair_count + 1) < 0) {
         return -1;
     }
 
@@ -640,6 +640,13 @@ bool map_iterator_equal(map_iterator_t *a, map_iterator_t *b) {
         return false;
     }
     return a->current_bucket == b->current_bucket && a->current_pair == b->current_pair && a->map == b->map;
+}
+
+bool map_at_end(map_iterator_t *iterator) {
+    if (!iterator) {
+        return true;
+    }
+    return iterator->current_bucket >= iterator->map->bucket_count; 
 }
 
 void map_iterator_free(map_iterator_t *iterator) {

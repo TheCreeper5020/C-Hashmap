@@ -176,6 +176,11 @@ int map_get_pair(map_iterator_t *iterator, void **key, void **value);
 bool map_iterator_equal(map_iterator_t *a, map_iterator_t *b);
 
 /*
+    Determine if a map_iterator_t is at the end of the map
+*/
+bool map_at_end(map_iterator_t *iterator);
+
+/*
     Free any memory associated with `iterator`
 */
 void map_iterator_free(map_iterator_t *iterator);
